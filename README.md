@@ -63,6 +63,8 @@ nre_free(re);
 | `nre_exec(re, text, len, start, m, nm)` | Finds the leftmost match starting at or after `start`. `m[0]` is the whole match and `m[i]` is group `i`; groups that did not take part are `-1`. Anchors and `\b` still see the text before `start`, so you can loop over matches. |
 | `nre_fullmatch(re, text, len, m, nm)` | Like `nre_exec`, but the match has to cover the whole text. |
 | `nre_groups(re)` | The number of capture groups. |
+| `nre_group_index(re, name)` | The index of a named group, or `-1` if there isn't one. Named groups are numbered along with unnamed ones, left to right by opening parenthesis. |
+| `nre_group_name(re, i)` | The name of group `i`, or `NULL` if it has none. |
 | `nre_free(re)` | Frees a compiled pattern. |
 
 Text is a byte buffer with an explicit length, so embedded NUL bytes are fine.
@@ -87,6 +89,7 @@ threads.
 | `a\|b` | alternation |
 | `(x)` | capture group (up to 32) |
 | `(?:x)` | group without capturing |
+| `(?<name>x)`, `(?P<name>x)` | named capture group; names are letters, digits and `_`, not starting with a digit |
 
 A `{` that does not start a well-formed count, as in `a{,2}` or `x{`, is a
 literal brace. Lookaround and backreferences aren't supported, because neither

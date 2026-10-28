@@ -17,6 +17,7 @@
 #define MAX_REPEAT 1000  /* largest count allowed in {m,n} */
 #define MAX_INST 10000   /* program size limit, bounds memory and recursion */
 #define MAX_GROUPS 32    /* capture groups per pattern */
+#define MAX_NAME 32      /* bytes in a group name */
 
 /* ---------- ASCII helpers (locale independent) ---------- */
 
@@ -58,6 +59,7 @@ typedef struct {
     const char *start;
     int flags;
     int ngroups;
+    char *names[MAX_GROUPS + 1]; /* names[i] is group i's name, or NULL */
     Node **nodes;
     size_t nnodes, capnodes;
     ByteSet *classes;
@@ -267,13 +269,43 @@ static Node *parse_atom(Parser *ps)
     case '(': {
         int capture = 1;
         ps->p++;
+        const char *name = NULL;
+        size_t namelen = 0;
         if (ps->p[0] == '?') {
-            if (ps->p[1] != ':') return fail(ps, "unsupported group syntax");
-            capture = 0;
-            ps->p += 2;
+            if (ps->p[1] == ':') {
+                capture = 0;
+                ps->p += 2;
+            } else if ((ps->p[1] == '<' && ps->p[2] != '=' && ps->p[2] != '!') ||
+                       (ps->p[1] == 'P' && ps->p[2] == '<')) {
+                /* (?<name>x) or Python's (?P<name>x) */
+                ps->p += ps->p[1] == 'P' ? 3 : 2;
+                name = ps->p;
+                while (is_word((unsigned char)ps->p[namelen])) namelen++;
+                if (namelen == 0 || is_digit((unsigned char)name[0]))
+                    return fail(ps, "bad group name");
+                if (ps->p[namelen] != '>') {
+                    ps->p += namelen;
+                    return fail(ps, "missing '>' after group name");
+                }
+                if (namelen > MAX_NAME) return fail(ps, "group name too long (max %d)", MAX_NAME);
+                for (int i = 1; i <= ps->ngroups; i++) {
+                    if (ps->names[i] && strlen(ps->names[i]) == namelen &&
+                        memcmp(ps->names[i], name, namelen) == 0)
+                        return fail(ps, "duplicate group name '%.*s'", (int)namelen, name);
+                }
+                ps->p += namelen + 1;
+            } else {
+                return fail(ps, "unsupported group syntax");
+            }
         }
         int index = capture ? ++ps->ngroups : 0;
         if (index > MAX_GROUPS) return fail(ps, "too many capture groups (max %d)", MAX_GROUPS);
+        if (name) {
+            ps->names[index] = malloc(namelen + 1);
+            if (!ps->names[index]) return fail(ps, "out of memory");
+            memcpy(ps->names[index], name, namelen);
+            ps->names[index][namelen] = '\0';
+        }
         Node *inner = parse_alt(ps);
         if (!inner) return NULL;
         if (*ps->p != ')') return fail(ps, "missing ')'");
@@ -529,6 +561,7 @@ struct nre {
     int main_pc; /* entry point that skips the unanchored-search prefix */
     int ngroups;
     ByteSet *classes;
+    char *names[MAX_GROUPS + 1];
 };
 
 static void free_parser(Parser *ps)
@@ -536,6 +569,7 @@ static void free_parser(Parser *ps)
     for (size_t i = 0; i < ps->nnodes; i++) free(ps->nodes[i]);
     free(ps->nodes);
     free(ps->classes);
+    for (int i = 0; i <= MAX_GROUPS; i++) free(ps->names[i]);
 }
 
 nre *nre_compile(const char *pattern, int flags, char *err, size_t errlen)
@@ -591,6 +625,8 @@ nre *nre_compile(const char *pattern, int flags, char *err, size_t errlen)
         re->ngroups = ps.ngroups;
         re->classes = ps.classes;
         ps.classes = NULL; /* ownership moved */
+        memcpy(re->names, ps.names, sizeof re->names);
+        memset(ps.names, 0, sizeof ps.names);
         pg.code = NULL;
     }
     free(pg.code);
@@ -600,9 +636,24 @@ nre *nre_compile(const char *pattern, int flags, char *err, size_t errlen)
 
 size_t nre_groups(const nre *re) { return re ? (size_t)re->ngroups : 0; }
 
+int nre_group_index(const nre *re, const char *name)
+{
+    if (!re || !name) return -1;
+    for (int i = 1; i <= re->ngroups; i++)
+        if (re->names[i] && strcmp(re->names[i], name) == 0) return i;
+    return -1;
+}
+
+const char *nre_group_name(const nre *re, size_t group)
+{
+    if (!re || group == 0 || group > (size_t)re->ngroups) return NULL;
+    return re->names[group];
+}
+
 void nre_free(nre *re)
 {
     if (!re) return;
+    for (int i = 0; i <= MAX_GROUPS; i++) free(re->names[i]);
     free(re->code);
     free(re->classes);
     free(re);

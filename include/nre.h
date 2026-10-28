@@ -39,6 +39,15 @@ size_t nre_groups(const nre *re);
  * behaves like continuing a scan. On success returns 1 and fills up to nm
  * spans (m[0] is the whole match, m[i] is group i). Returns 0 on no match.
  */
+/*
+ * Look up a named group, written (?<name>x) or (?P<name>x). Returns its
+ * index, or -1 if the pattern has no group with that name.
+ */
+int nre_group_index(const nre *re, const char *name);
+
+/* The name of group `group`, or NULL if it is unnamed or out of range. */
+const char *nre_group_name(const nre *re, size_t group);
+
 int nre_exec(const nre *re, const char *text, size_t len, size_t start,
              nre_span *m, size_t nm);
 

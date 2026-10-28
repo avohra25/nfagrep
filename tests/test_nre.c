@@ -252,6 +252,47 @@ static void test_errors(void)
     CHECK(nre_compile(NULL, 0, NULL, 0) == NULL, "NULL pattern");
 }
 
+static void test_named_groups(void)
+{
+    nre *re = nre_compile("(?<year>\\d{4})-(?P<month>\\d\\d)-(\\d\\d)", 0, NULL, 0);
+    CHECK(re != NULL, "named groups compile");
+    if (re) {
+        CHECK(nre_groups(re) == 3, "named groups count: %zu", nre_groups(re));
+        CHECK(nre_group_index(re, "year") == 1, "year index");
+        CHECK(nre_group_index(re, "month") == 2, "month index");
+        CHECK(nre_group_index(re, "day") == -1, "missing name");
+        CHECK(nre_group_index(re, NULL) == -1, "NULL name");
+        CHECK(nre_group_name(re, 1) && strcmp(nre_group_name(re, 1), "year") == 0, "name of 1");
+        CHECK(nre_group_name(re, 2) && strcmp(nre_group_name(re, 2), "month") == 0, "name of 2");
+        CHECK(nre_group_name(re, 3) == NULL, "unnamed group has no name");
+        CHECK(nre_group_name(re, 0) == NULL, "group 0 has no name");
+        CHECK(nre_group_name(re, 4) == NULL, "out of range");
+        const char *text = "on 2026-10-28 at noon";
+        nre_span m[4];
+        CHECK(nre_exec(re, text, strlen(text), 0, m, 4), "date matches");
+        CHECK(m[1].start == 3 && m[1].end == 7, "year span");
+        CHECK(m[2].start == 8 && m[2].end == 10, "month span");
+        CHECK(m[3].start == 11 && m[3].end == 13, "day span");
+        nre_free(re);
+    }
+    /* Named groups number in order with unnamed ones and nest normally. */
+    G("(a)(?<x>b(?<y>c))", "abc", 2, 1, 3);
+    G("(a)(?<x>b(?<y>c))", "abc", 3, 2, 3);
+    G("(?:(?<w>\\w+) )+", "ab cd ", 1, 3, 5);
+    M("(?<_under9>x+)", "yxxy", 1, 3);
+    CHECK(nre_group_index(NULL, "x") == -1 && nre_group_name(NULL, 1) == NULL, "NULL re");
+
+    ERR("(?<>a)", "bad group name");
+    ERR("(?<1a>a)", "bad group name");
+    ERR("(?<a-b>x)", "missing '>'");
+    ERR("(?<ab", "missing '>'");
+    ERR("(?<a>x)(?P<a>y)", "duplicate group name 'a'");
+    ERR("(?<=a)b", "unsupported group");
+    ERR("(?<!a)b", "unsupported group");
+    ERR("(?P=a)", "unsupported group");
+    ERR("(?<abcdefghijabcdefghijabcdefghijabc>x)", "too long");
+}
+
 static double seconds_for(const char *pat, const char *text)
 {
     nre *re = nre_compile(pat, 0, NULL, 0);
@@ -296,6 +337,7 @@ int main(void)
     test_icase();
     test_offsets_and_fullmatch();
     test_errors();
+    test_named_groups();
     test_pathological();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
