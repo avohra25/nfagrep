@@ -65,11 +65,35 @@ nre_free(re);
 | `nre_groups(re)` | The number of capture groups. |
 | `nre_group_index(re, name)` | The index of a named group, or `-1` if there isn't one. Named groups are numbered along with unnamed ones, left to right by opening parenthesis. |
 | `nre_group_name(re, i)` | The name of group `i`, or `NULL` if it has none. |
+| `nre_replace(re, text, len, repl, all, &outlen, &count, err, errlen)` | Replaces the first match, or every match when `all` is non-zero, using a template, and returns a new buffer you `free()`. See below. |
 | `nre_free(re)` | Frees a compiled pattern. |
 
 Text is a byte buffer with an explicit length, so embedded NUL bytes are fine.
 A compiled `nre` is never modified by matching and can be shared between
 threads.
+
+### Search and replace
+
+```c
+nre *re = nre_compile("(?<user>\\w+)@(?<host>\\w+)", 0, NULL, 0);
+size_t n;
+char *out = nre_replace(re, "ada@lovelace, alan@turing", 25, "${host}/${user}", 1, NULL, &n, err, sizeof err);
+/* out is "lovelace/ada, turing/alan" and n is 2 */
+free(out);
+```
+
+| In the template | Expands to |
+|---|---|
+| `$1`, `${1}` | group 1 (`$12` is group 12; write `${1}2` for group 1 then a `2`) |
+| `${name}` | a named group |
+| `$0`, `$&` | the whole match |
+| `$$` | a literal `$` |
+
+A group that did not take part in the match expands to nothing. A template
+that refers to a group the pattern doesn't have, or uses `$` any other way, is
+rejected before any matching happens. When replacing every match, an empty
+match right after the previous match is skipped, as in sed, Perl and Go, so
+replacing `x*` with `-` in `abxd` gives `-a-b-d-`.
 
 ## Supported syntax
 

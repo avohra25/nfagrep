@@ -807,3 +807,155 @@ int nre_fullmatch(const nre *re, const char *text, size_t len, nre_span *m, size
 {
     return run(re, text, len, 0, 1, m, nm);
 }
+
+/* ---------- substitution ---------- */
+
+typedef struct {
+    char *p;
+    size_t n, cap;
+    int oom;
+} Buf;
+
+static void buf_add(Buf *b, const char *s, size_t n)
+{
+    if (b->oom || n == 0) return;
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : 64;
+        while (cap < b->n + n + 1) cap *= 2;
+        char *grown = realloc(b->p, cap);
+        if (!grown) {
+            b->oom = 1;
+            return;
+        }
+        b->p = grown;
+        b->cap = cap;
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+}
+
+static void set_err(char *err, size_t errlen, const char *fmt, ...)
+{
+    if (!err || !errlen) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(err, errlen, fmt, ap);
+    va_end(ap);
+}
+
+/*
+ * Walk a replacement template. With out == NULL it only checks the template
+ * and reports the first problem; otherwise it appends the expansion for the
+ * match described by m (which has ngroups + 1 entries).
+ */
+static int expand(const nre *re, const char *repl, const char *text, const nre_span *m,
+                  Buf *out, char *err, size_t errlen)
+{
+    for (const char *p = repl; *p; ) {
+        const char *dollar = strchr(p, '$');
+        if (!dollar) {
+            if (out) buf_add(out, p, strlen(p));
+            break;
+        }
+        if (out) buf_add(out, p, (size_t)(dollar - p));
+        long at = (long)(dollar - repl);
+        p = dollar + 1;
+        long group = -1;
+        if (*p == '$') {
+            if (out) buf_add(out, "$", 1);
+            p++;
+            continue;
+        } else if (*p == '&') {
+            group = 0;
+            p++;
+        } else if (is_digit((unsigned char)*p)) {
+            group = 0;
+            for (; is_digit((unsigned char)*p); p++)
+                if (group <= MAX_GROUPS) group = group * 10 + (*p - '0');
+        } else if (*p == '{') {
+            const char *name = ++p;
+            while (is_word((unsigned char)*p)) p++;
+            size_t n = (size_t)(p - name);
+            if (*p != '}' || n == 0) {
+                set_err(err, errlen, "bad ${...} reference at offset %ld", at);
+                return 0;
+            }
+            p++;
+            if (is_digit((unsigned char)name[0])) {
+                group = 0;
+                for (size_t i = 0; i < n; i++) {
+                    if (!is_digit((unsigned char)name[i])) {
+                        set_err(err, errlen, "bad ${...} reference at offset %ld", at);
+                        return 0;
+                    }
+                    if (group <= MAX_GROUPS) group = group * 10 + (name[i] - '0');
+                }
+            } else {
+                char key[MAX_NAME + 1];
+                if (n <= MAX_NAME) {
+                    memcpy(key, name, n);
+                    key[n] = '\0';
+                    group = nre_group_index(re, key);
+                }
+                if (group < 0) {
+                    set_err(err, errlen, "no group named '%.*s' at offset %ld", (int)n, name, at);
+                    return 0;
+                }
+            }
+        } else {
+            set_err(err, errlen, "'$' must be followed by a group, {name}, & or $ at offset %ld", at);
+            return 0;
+        }
+        if (group > re->ngroups) {
+            set_err(err, errlen, "no group %ld at offset %ld", group, at);
+            return 0;
+        }
+        if (out && m[group].start >= 0)
+            buf_add(out, text + m[group].start, (size_t)(m[group].end - m[group].start));
+    }
+    return 1;
+}
+
+char *nre_replace(const nre *re, const char *text, size_t len, const char *repl, int all,
+                  size_t *outlen, size_t *count, char *err, size_t errlen)
+{
+    if (err && errlen) err[0] = '\0';
+    if (count) *count = 0;
+    if (!re || !repl || (!text && len)) {
+        set_err(err, errlen, "null argument");
+        return NULL;
+    }
+    if (!expand(re, repl, NULL, NULL, NULL, err, errlen)) return NULL;
+
+    nre_span m[MAX_GROUPS + 1];
+    size_t nm = (size_t)re->ngroups + 1;
+    Buf out = {0};
+    size_t pos = 0, copied = 0, n = 0;
+    long prev_end = -1;
+    while (pos <= len && nre_exec(re, text, len, pos, m, nm)) {
+        if (m[0].start == m[0].end && m[0].start == prev_end) {
+            /* An empty match right where the last one ended is skipped, so
+             * x* on "abxd" gives -a-b-d- as in Go, sed and Perl. */
+            pos = (size_t)m[0].start + 1;
+            continue;
+        }
+        buf_add(&out, text + copied, (size_t)m[0].start - copied);
+        expand(re, repl, text, m, &out, NULL, 0);
+        copied = (size_t)m[0].end;
+        prev_end = m[0].end;
+        n++;
+        if (!all) break;
+        pos = m[0].end > m[0].start ? (size_t)m[0].end : (size_t)m[0].end + 1;
+    }
+    buf_add(&out, text + copied, len - copied);
+    if (!out.oom && !out.p) out.p = malloc(1);
+    if (out.oom || !out.p) {
+        free(out.p);
+        set_err(err, errlen, "out of memory");
+        return NULL;
+    }
+    out.p[out.n] = '\0';
+    if (outlen) *outlen = out.n;
+    if (count) *count = n;
+    return out.p;
+}

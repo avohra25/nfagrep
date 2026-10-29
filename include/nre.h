@@ -55,6 +55,19 @@ int nre_exec(const nre *re, const char *text, size_t len, size_t start,
 int nre_fullmatch(const nre *re, const char *text, size_t len,
                   nre_span *m, size_t nm);
 
+/*
+ * Replace the first match (or every match, if `all` is non-zero) of re in
+ * text[0..len) with the template repl, and return the result as a new
+ * NUL-terminated buffer the caller must free(). In the template, $1 or ${1}
+ * is a group by number, ${name} a named group, $0 or $& the whole match and
+ * $$ a literal dollar sign; groups that did not take part expand to nothing.
+ * An empty match directly after the previous match is skipped. The result's
+ * length goes in *outlen and the number of replacements in *count (either
+ * may be NULL). Returns NULL and fills err on a bad template or no memory.
+ */
+char *nre_replace(const nre *re, const char *text, size_t len, const char *repl, int all,
+                  size_t *outlen, size_t *count, char *err, size_t errlen);
+
 void nre_free(nre *re);
 
 #ifdef __cplusplus

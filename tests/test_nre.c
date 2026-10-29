@@ -2,6 +2,7 @@
 #include "nre.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -293,6 +294,84 @@ static void test_named_groups(void)
     ERR("(?<abcdefghijabcdefghijabcdefghijabc>x)", "too long");
 }
 
+/* Expect nre_replace(pat, text, repl, all) to give want with n replacements. */
+static void replace_is(int line, const char *pat, const char *text, const char *repl, int all,
+                       const char *want, size_t want_n)
+{
+    char err[160];
+    nre *re = nre_compile(pat, 0, err, sizeof err);
+    checks++;
+    if (!re) {
+        failures++;
+        fprintf(stderr, "line %d: /%s/ failed to compile: %s\n", line, pat, err);
+        return;
+    }
+    size_t n = 99, outlen = 0;
+    char *got = nre_replace(re, text, strlen(text), repl, all, &outlen, &n, err, sizeof err);
+    CHECK(got && strcmp(got, want) == 0 && outlen == strlen(want) && n == want_n,
+          "line %d: s/%s/%s/ on \"%s\": want \"%s\" (%zu), got \"%s\" (%zu) %s", line, pat, repl, text,
+          want, want_n, got ? got : "(null)", n, got ? "" : err);
+    free(got);
+    nre_free(re);
+}
+#define R1(pat, text, repl, want, n) replace_is(__LINE__, pat, text, repl, 0, want, n)
+#define RA(pat, text, repl, want, n) replace_is(__LINE__, pat, text, repl, 1, want, n)
+
+static void bad_template(int line, const char *pat, const char *repl, const char *needle)
+{
+    char err[160];
+    nre *re = nre_compile(pat, 0, NULL, 0);
+    char *got = nre_replace(re, "abc", 3, repl, 1, NULL, NULL, err, sizeof err);
+    CHECK(got == NULL && strstr(err, needle) != NULL, "line %d: template \"%s\": wanted \"%s\" in \"%s\"",
+          line, repl, needle, got ? "(no error)" : err);
+    free(got);
+    nre_free(re);
+}
+#define BADT(pat, repl, needle) bad_template(__LINE__, pat, repl, needle)
+
+static void test_replace(void)
+{
+    R1("o", "foo boo", "0", "f0o boo", 1);
+    RA("o", "foo boo", "0", "f00 b00", 4);
+    RA("q", "foo", "x", "foo", 0);
+    RA("o", "", "x", "", 0);
+    RA("(\\w+)@(\\w+)", "ada@lovelace, alan@turing", "$2.$1", "lovelace.ada, turing.alan", 2);
+    RA("(?<user>\\w+)@(?<host>\\w+)", "ada@lovelace", "${host}/${user}", "lovelace/ada", 1);
+    RA("(\\d+)", "a1b22", "[$0|$&|${1}]", "a[1|1|1]b[22|22|22]", 2);
+    RA("x", "axb", "$$", "a$b", 1);
+    RA("(a)|(b)", "ab", "<$1$2>", "<a><b>", 2);       /* unset groups are empty */
+    RA("(a)", "aa", "${1}0", "a0a0", 2);              /* braces end a number */
+    RA("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", "abcdefghij", "$10$1", "ja", 1);
+    RA("x*", "abxd", "-", "-a-b-d-", 4);              /* empty match after x is skipped */
+    RA("", "abc", "-", "-a-b-c-", 4);
+    RA("\\b", "hi yo", "|", "|hi| |yo|", 4);
+    RA("^", "abc", ">", ">abc", 1);
+    RA("$", "abc", "<", "abc<", 1);
+    RA("a|", "baaac", "-", "-b---c-", 5);
+    RA("a+?", "aaa", "<$0>", "<a><a><a>", 3);
+    R1("\\s+", "  a  b", "", "a  b", 1);
+
+    /* Embedded NUL bytes pass through. */
+    nre *re = nre_compile("b", 0, NULL, 0);
+    size_t outlen = 0, n = 0;
+    char *got = nre_replace(re, "a\0b\0b", 5, "X", 1, &outlen, &n, NULL, 0);
+    CHECK(got && outlen == 5 && n == 2 && memcmp(got, "a\0X\0X", 5) == 0, "NUL bytes in replace");
+    free(got);
+    nre_free(re);
+
+    BADT("(a)", "$2", "no group 2");
+    BADT("(a)", "${2}", "no group 2");
+    BADT("(a)", "$999999999999", "no group");
+    BADT("(?<x>a)", "${y}", "no group named 'y'");
+    BADT("a", "x$", "must be followed");
+    BADT("a", "$z", "must be followed");
+    BADT("a", "${", "bad ${...}");
+    BADT("a", "${}", "bad ${...}");
+    BADT("a", "${1x}", "bad ${...}");
+    BADT("a", "ab${cd", "at offset 2");
+    CHECK(nre_replace(NULL, "a", 1, "b", 1, NULL, NULL, NULL, 0) == NULL, "NULL re");
+}
+
 static double seconds_for(const char *pat, const char *text)
 {
     nre *re = nre_compile(pat, 0, NULL, 0);
@@ -338,6 +417,7 @@ int main(void)
     test_offsets_and_fullmatch();
     test_errors();
     test_named_groups();
+    test_replace();
     test_pathological();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
