@@ -44,7 +44,7 @@ static int set_has(const uint8_t *s, int c) { return (s[c >> 3] >> (c & 7)) & 1;
 /* ---------- AST ---------- */
 
 typedef enum { N_EMPTY, N_CHAR, N_ANY, N_CLASS, N_ASSERT, N_CAT, N_ALT, N_REPEAT, N_GROUP } NodeType;
-enum { A_BOL, A_EOL, A_WORDB, A_NWORDB };
+enum { A_BOL, A_EOL, A_WORDB, A_NWORDB, A_WSTART, A_WEND };
 
 typedef struct Node {
     NodeType type;
@@ -588,6 +588,16 @@ nre *nre_compile(const char *pattern, int flags, char *err, size_t errlen)
 
     Node *root = parse_alt(&ps);
     if (root && *ps.p == ')') fail(&ps, "unmatched ')'");
+    if (root && !ps.failed && (flags & NRE_WORD)) {
+        /* Whole-word mode: the match must not have a word character
+         * directly before or after it (grep -w). */
+        Node *pre = new_node(&ps, N_ASSERT), *post = new_node(&ps, N_ASSERT);
+        if (pre && post) {
+            pre->c = A_WSTART;
+            post->c = A_WEND;
+            root = binary(&ps, N_CAT, pre, binary(&ps, N_CAT, root, post));
+        }
+    }
     if (ps.failed) {
         free_parser(&ps);
         return NULL;
@@ -681,6 +691,8 @@ static int assertion_holds(const VM *vm, int kind, long pos)
     switch (kind) {
     case A_BOL: return pos == 0;
     case A_EOL: return pos == vm->len;
+    case A_WSTART: return pos == 0 || !is_word(vm->text[pos - 1]);
+    case A_WEND: return pos == vm->len || !is_word(vm->text[pos]);
     default: {
         int before = pos > 0 && is_word(vm->text[pos - 1]);
         int after = pos < vm->len && is_word(vm->text[pos]);
@@ -957,5 +969,39 @@ char *nre_replace(const nre *re, const char *text, size_t len, const char *repl,
     out.p[out.n] = '\0';
     if (outlen) *outlen = out.n;
     if (count) *count = n;
+    return out.p;
+}
+
+char *nre_expand(const nre *re, const char *repl, const char *text, const nre_span *m, size_t nm,
+                 size_t *outlen, char *err, size_t errlen)
+{
+    if (err && errlen) err[0] = '\0';
+    if (!re || !repl || !m || nm == 0) {
+        set_err(err, errlen, "null argument");
+        return NULL;
+    }
+    if (!expand(re, repl, NULL, NULL, NULL, err, errlen)) return NULL;
+    nre_span full[MAX_GROUPS + 1];
+    for (int i = 0; i <= re->ngroups; i++) {
+        if ((size_t)i < nm) {
+            full[i] = m[i];
+        } else {
+            full[i].start = full[i].end = -1;
+        }
+    }
+    if (full[0].start < 0) {
+        set_err(err, errlen, "no match to expand");
+        return NULL;
+    }
+    Buf out = {0};
+    expand(re, repl, text, full, &out, NULL, 0);
+    if (!out.oom && !out.p) out.p = malloc(1);
+    if (out.oom || !out.p) {
+        free(out.p);
+        set_err(err, errlen, "out of memory");
+        return NULL;
+    }
+    out.p[out.n] = '\0';
+    if (outlen) *outlen = out.n;
     return out.p;
 }

@@ -22,12 +22,17 @@ make install PREFIX=$HOME/.local
 ## Using the CLI
 
 ```
-usage: nfagrep [-cinovx] PATTERN [FILE...]
+usage: nfagrep [-cinovwx] [-r REPLACEMENT] PATTERN [FILE...]
+       nfagrep [-cinovwx] [-r REPLACEMENT] -e PATTERN [-e PATTERN]... [FILE...]
   -c  print only a count of selected lines
+  -e  use PATTERN; repeat to select lines matching any of them
   -i  ignore ASCII case
   -n  prefix each line with its line number
   -o  print only the matched parts of each line
+  -r  print selected lines with every match replaced by REPLACEMENT;
+      with -o, print just the replacement for each match
   -v  select lines that do not match
+  -w  matches must not have a word character right before or after them
   -x  the pattern must match the whole line
 ```
 
@@ -35,8 +40,27 @@ usage: nfagrep [-cinovx] PATTERN [FILE...]
 $ nfagrep -n '\bTODO\b' src/*.c
 $ printf 'call 555-1234\nno number\n' | nfagrep -o '\d{3}-\d{4}'
 555-1234
-$ nfagrep -ci 'error|warn' build.log
+$ nfagrep -ci -e error -e warn build.log
+$ nfagrep -w 'id' schema.sql            # skips "valid" and "id_card"
 ```
+
+`-r` turns nfagrep into a small search-and-replace tool, using the template
+syntax described under [Search and replace](#search-and-replace). It only
+prints the lines that matched, so it is a filter as well as an editor:
+
+```sh
+$ printf 'ada@lovelace\nnobody\n' | nfagrep -r '${host}: ${user}' '(?<user>\w+)@(?<host>\w+)'
+lovelace: ada
+$ nfagrep -o -r '$1' 'version = "([^"]+)"' Cargo.toml
+0.3.1
+```
+
+`-w` is the same rule grep uses: the match can't have a letter, digit or `_`
+directly before or after it. That's different from wrapping the pattern in
+`\b`, which would refuse `-x` in `(-x)` because there is no word boundary
+before the `-`. With `-e`, each pattern is checked on its own first, so an
+error names the pattern that caused it. `-r` can't be combined with `-v`,
+since unselected lines have nothing to replace.
 
 The exit status is 0 if any line was selected, 1 if none were, and 2 on a bad
 pattern or an unreadable file, the same as grep.
@@ -59,13 +83,14 @@ nre_free(re);
 
 | Function | What it does |
 |---|---|
-| `nre_compile(pattern, flags, err, errlen)` | Compiles a pattern. Pass `NRE_ICASE` for ASCII case-insensitive matching. On error it returns `NULL` and writes a message with the offset into `err`. |
+| `nre_compile(pattern, flags, err, errlen)` | Compiles a pattern. Pass `NRE_ICASE` for ASCII case-insensitive matching and `NRE_WORD` to only accept matches with no word character directly before or after them. On error it returns `NULL` and writes a message with the offset into `err`. |
 | `nre_exec(re, text, len, start, m, nm)` | Finds the leftmost match starting at or after `start`. `m[0]` is the whole match and `m[i]` is group `i`; groups that did not take part are `-1`. Anchors and `\b` still see the text before `start`, so you can loop over matches. |
 | `nre_fullmatch(re, text, len, m, nm)` | Like `nre_exec`, but the match has to cover the whole text. |
 | `nre_groups(re)` | The number of capture groups. |
 | `nre_group_index(re, name)` | The index of a named group, or `-1` if there isn't one. Named groups are numbered along with unnamed ones, left to right by opening parenthesis. |
 | `nre_group_name(re, i)` | The name of group `i`, or `NULL` if it has none. |
 | `nre_replace(re, text, len, repl, all, &outlen, &count, err, errlen)` | Replaces the first match, or every match when `all` is non-zero, using a template, and returns a new buffer you `free()`. See below. |
+| `nre_expand(re, repl, text, m, nm, &outlen, err, errlen)` | Expands a replacement template for one match found by `nre_exec`, without touching the rest of the text. |
 | `nre_free(re)` | Frees a compiled pattern. |
 
 Text is a byte buffer with an explicit length, so embedded NUL bytes are fine.

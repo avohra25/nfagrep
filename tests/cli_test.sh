@@ -48,6 +48,24 @@ $tmp/more.txt:only an apple"                     -- 'apple' "$F" "$tmp/more.txt"
 expect "bad pattern"      2 ""                   -- '(oops' "$F"
 expect "missing file"     2 ""                   -- 'x' "$tmp/nope.txt"
 expect "usage"            2 ""                   --
+expect "two -e patterns"  0 "Banana split
+cherry tart"                                     -- -e 'nan' -e 'tart' "$F"
+expect "-e with files"    0 "$F:cherry tart
+$tmp/more.txt:no fruit here"                     -- -e 'cherry' -e 'fruit' "$F" "$tmp/more.txt"
+expect "-e bad pattern"   2 ""                   -- -e 'ok' -e '[x' "$F"
+expect "-e dash pattern"  0 "Banana split"       -- -e '-|split' "$F"
+expect "word"             0 "apple pie"          -- -w 'pie' "$F"
+expect "word miss"        1 ""                   -- -w 'app' "$F"
+expect "word only"        0 "an"                 -- -ow 'an|a' "$tmp/more.txt"
+expect "replace"          0 "pie of apple
+crumble of apple"                                -- -r '$2 of $1' '^(apple) (\w+)' "$F"
+expect "replace named"    0 "[split]"            -- -r '[${dish}]' -x 'Banana (?<dish>\w+)' "$F"
+expect "replace all"      0 "Ba_a_a split"       -- -r '_' -i 'N' "$F"
+expect "replace only"     0 "pie
+crumble"                                         -- -o -r '$1' 'apple (\w+)' "$F"
+expect "replace count"    0 "2"                  -- -c -r 'x' 'apple' "$F"
+expect "bad replacement"  2 ""                   -- -r '$2' '(apple)' "$F"
+expect "replace invert"   2 ""                   -- -v -r 'x' 'apple' "$F"
 
 got=$(printf 'one\ntwo\nthree' | "$BIN" -n 'e$')
 if [ "$got" = "1:one

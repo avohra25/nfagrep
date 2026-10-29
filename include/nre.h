@@ -21,7 +21,8 @@ typedef struct {
 } nre_span;
 
 enum {
-    NRE_ICASE = 1 /* ASCII case-insensitive matching */
+    NRE_ICASE = 1, /* ASCII case-insensitive matching */
+    NRE_WORD = 2   /* matches must not touch a word character on either side */
 };
 
 /*
@@ -67,6 +68,14 @@ int nre_fullmatch(const nre *re, const char *text, size_t len,
  */
 char *nre_replace(const nre *re, const char *text, size_t len, const char *repl, int all,
                   size_t *outlen, size_t *count, char *err, size_t errlen);
+
+/*
+ * Expand the template repl (same syntax as nre_replace) for one match, where
+ * m holds nm spans as filled in by nre_exec. Groups past nm count as unset.
+ * Returns a new NUL-terminated buffer to free(), or NULL with err filled in.
+ */
+char *nre_expand(const nre *re, const char *repl, const char *text, const nre_span *m, size_t nm,
+                 size_t *outlen, char *err, size_t errlen);
 
 void nre_free(nre *re);
 

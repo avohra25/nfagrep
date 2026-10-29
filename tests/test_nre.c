@@ -372,6 +372,56 @@ static void test_replace(void)
     CHECK(nre_replace(NULL, "a", 1, "b", 1, NULL, NULL, NULL, 0) == NULL, "NULL re");
 }
 
+static void word_at(int line, const char *pat, const char *text, long s, long e)
+{
+    nre *re = nre_compile(pat, NRE_WORD, NULL, 0);
+    nre_span m = { -2, -2 };
+    int hit = re && nre_exec(re, text, strlen(text), 0, &m, 1);
+    if (s < 0) {
+        CHECK(re && !hit, "line %d: -w /%s/ on \"%s\": expected no match, got [%ld,%ld)", line, pat, text, m.start, m.end);
+    } else {
+        CHECK(hit && m.start == s && m.end == e, "line %d: -w /%s/ on \"%s\": expected [%ld,%ld), got [%ld,%ld)",
+              line, pat, text, s, e, m.start, m.end);
+    }
+    nre_free(re);
+}
+#define W(pat, text, s, e) word_at(__LINE__, pat, text, s, e)
+
+static void test_word_mode(void)
+{
+    W("cat", "concat cat", 7, 10);
+    W("cat", "cats", -1, -1);
+    W("cat", "cat", 0, 3);
+    W("cat", "a-cat-b", 2, 5);
+    W("\\w+", "  hello  ", 2, 7);
+    W("-x", "a -x b", 2, 4);    /* non-word edges are fine next to spaces */
+    W("-x", "(-x)", 1, 3);      /* \b(?:-x)\b would need a word char before the '-' */
+    W("-x", "a-x b", -1, -1);
+    W("x-", "ax- b", -1, -1);   /* 'a' touches the start of the match */
+    W("ab|abc", "abc", 0, 3);   /* the alternative that fits the word is used */
+    W("a*", "bbb", -1, -1);     /* every empty match touches a 'b' */
+    W("a*", "b a", 2, 3);
+
+    nre *re = nre_compile("(\\w+)=(?<v>\\d+)", 0, NULL, 0);
+    const char *text = "x=1 y=22";
+    nre_span m[3];
+    CHECK(nre_exec(re, text, strlen(text), 4, m, 3), "expand: match");
+    size_t n = 0;
+    char *s = nre_expand(re, "${v}<-$1 [$&] $$", text, m, 3, &n, NULL, 0);
+    CHECK(s && strcmp(s, "22<-y [y=22] $") == 0 && n == 14, "expand: got %s", s ? s : "(null)");
+    free(s);
+    s = nre_expand(re, "[$2]", text, m, 1, NULL, NULL, 0);
+    CHECK(s && strcmp(s, "[]") == 0, "expand: groups past nm are unset");
+    free(s);
+    char err[160];
+    s = nre_expand(re, "$3", text, m, 3, NULL, err, sizeof err);
+    CHECK(!s && strstr(err, "no group 3"), "expand: bad group");
+    nre_span none = { -1, -1 };
+    s = nre_expand(re, "x", text, &none, 1, NULL, err, sizeof err);
+    CHECK(!s && strstr(err, "no match"), "expand: unset match");
+    nre_free(re);
+}
+
 static double seconds_for(const char *pat, const char *text)
 {
     nre *re = nre_compile(pat, 0, NULL, 0);
@@ -418,6 +468,7 @@ int main(void)
     test_errors();
     test_named_groups();
     test_replace();
+    test_word_mode();
     test_pathological();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
